@@ -3,6 +3,7 @@
 import { useAuth } from '@/lib/auth'
 import { useJobs } from '@/lib/useJobs'
 import ProtectedRoute from '@/components/ProtectedRoute'
+import Link from 'next/link'
 
 function DashboardContent() {
   const { user, logout } = useAuth()
@@ -43,6 +44,9 @@ function DashboardContent() {
               <h1 className="text-2xl font-bold text-gray-900">BIMView Dashboard</h1>
             </div>
             <div className="flex items-center space-x-4">
+              <Link href="/upload" className="btn-primary">
+                Subir Archivo
+              </Link>
               <span className="text-gray-600">Hola, {user?.email}</span>
               <button
                 onClick={logout}
@@ -84,9 +88,9 @@ function DashboardContent() {
               <p className="text-gray-500 mb-4">
                 Sube tu primer archivo .ply para comenzar una conversión
               </p>
-              <button className="btn-primary">
+              <Link href="/upload" className="btn-primary">
                 Subir Archivo
-              </button>
+              </Link>
             </div>
           ) : (
             <div className="overflow-x-auto">

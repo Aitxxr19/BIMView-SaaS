@@ -42,6 +42,15 @@ export interface JobCreateRequest {
   input_key: string
 }
 
+export interface UploadResponse {
+  message: string
+  filename: string
+  unique_filename: string
+  job_id: number
+  file_size: number
+  file_path: string
+}
+
 class ApiClient {
   private baseURL: string
   private token: string | null = null
@@ -144,6 +153,69 @@ class ApiClient {
     })
   }
 
+  // Métodos de subida de archivos
+  async uploadFile(file: File): Promise<ApiResponse<UploadResponse>> {
+    const formData = new FormData()
+    formData.append('file', file)
+
+    const url = `${this.baseURL}/api/upload`
+    
+    const headers: HeadersInit = {}
+    if (this.token) {
+      headers.Authorization = `Bearer ${this.token}`
+    }
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: formData,
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        return {
+          error: data.detail || 'Error al subir archivo',
+          status: response.status,
+        }
+      }
+
+      return {
+        data,
+        status: response.status,
+      }
+    } catch (error) {
+      return {
+        error: 'Error de conexión',
+        status: 0,
+      }
+    }
+  }
+
+  async downloadFile(filename: string): Promise<Blob | null> {
+    const url = `${this.baseURL}/api/files/${filename}`
+    
+    const headers: HeadersInit = {}
+    if (this.token) {
+      headers.Authorization = `Bearer ${this.token}`
+    }
+
+    try {
+      const response = await fetch(url, {
+        headers,
+      })
+
+      if (!response.ok) {
+        return null
+      }
+
+      return await response.blob()
+    } catch (error) {
+      return null
+    }
+  }
+
   // Métodos de utilidad
   setToken(token: string) {
     this.token = token
@@ -181,6 +253,11 @@ export const jobs = {
   getById: (id: number) => apiClient.getJob(id),
   create: (jobData: JobCreateRequest) => apiClient.createJob(jobData),
   delete: (id: number) => apiClient.deleteJob(id),
+}
+
+export const upload = {
+  file: (file: File) => apiClient.uploadFile(file),
+  download: (filename: string) => apiClient.downloadFile(filename),
 }
 
 export default apiClient
