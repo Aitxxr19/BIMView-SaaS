@@ -2,7 +2,12 @@ from datetime import datetime, timedelta
 from typing import Optional
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from fastapi import HTTPException, status
+from fastapi import HTTPException, status, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from sqlalchemy.orm import Session
+
+from database import get_db
+from models import User
 import os
 
 # Configuración
@@ -12,6 +17,9 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 # Contexto para hash de contraseñas
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# Security
+security = HTTPBearer()
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verificar contraseña"""
@@ -43,3 +51,24 @@ def verify_token(token: str, credentials_exception):
         return email
     except JWTError:
         raise credentials_exception
+
+def get_user_by_email(db: Session, email: str) -> Optional[User]:
+    """Obtener usuario por email"""
+    return db.query(User).filter(User.email == email).first()
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+) -> User:
+    """Obtener usuario actual desde token"""
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    
+    email = verify_token(credentials.credentials, credentials_exception)
+    user = get_user_by_email(db, email)
+    if user is None:
+        raise credentials_exception
+    return user

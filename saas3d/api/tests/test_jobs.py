@@ -4,7 +4,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from main import app
 from database import get_db, Base
-from models import JobStatus
+from enums import JobStatus
 
 # Base de datos de prueba en memoria
 SQLALCHEMY_DATABASE_URL = "sqlite:///./test.db"

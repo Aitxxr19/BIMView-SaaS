@@ -1,7 +1,7 @@
 from pydantic import BaseModel, EmailStr
 from typing import Optional, List
 from datetime import datetime
-from models import JobStatus
+from enums import JobStatus
 
 # Esquemas para requests
 class UserCreate(BaseModel):

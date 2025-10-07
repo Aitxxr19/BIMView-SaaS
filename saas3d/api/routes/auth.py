@@ -1,5 +1,4 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from datetime import timedelta
 from typing import Optional
@@ -12,15 +11,12 @@ from auth import (
     get_password_hash, 
     create_access_token, 
     verify_token,
+    get_user_by_email,
+    get_current_user,
     ACCESS_TOKEN_EXPIRE_MINUTES
 )
 
 router = APIRouter()
-security = HTTPBearer()
-
-def get_user_by_email(db: Session, email: str) -> Optional[User]:
-    """Obtener usuario por email"""
-    return db.query(User).filter(User.email == email).first()
 
 def authenticate_user(db: Session, email: str, password: str) -> Optional[User]:
     """Autenticar usuario"""
@@ -29,23 +25,6 @@ def authenticate_user(db: Session, email: str, password: str) -> Optional[User]:
         return None
     if not verify_password(password, user.hashed_password):
         return None
-    return user
-
-def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
-    db: Session = Depends(get_db)
-) -> User:
-    """Obtener usuario actual desde token"""
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    
-    email = verify_token(credentials.credentials, credentials_exception)
-    user = get_user_by_email(db, email)
-    if user is None:
-        raise credentials_exception
     return user
 
 @router.post("/register", response_model=UserResponse)

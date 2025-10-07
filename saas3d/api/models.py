@@ -2,13 +2,7 @@ from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey, T
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from database import Base
-import enum
-
-class JobStatus(str, enum.Enum):
-    queued = 'queued'
-    processing = 'processing'
-    completed = 'completed'
-    failed = 'failed'
+from enums import JobStatus
 
 class User(Base):
     __tablename__ = 'users'

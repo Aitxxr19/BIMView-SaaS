@@ -4,9 +4,10 @@ from typing import List
 from datetime import datetime
 
 from database import get_db
-from models import Job, JobStatus, User
+from models import Job, User
 from schemas import JobCreate, JobResponse
-from routes.auth import get_current_user
+from enums import JobStatus
+from auth import get_current_user
 
 router = APIRouter()
 
