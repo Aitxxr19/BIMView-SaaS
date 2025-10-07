@@ -1,0 +1,21 @@
+version: 2
+updates:
+  # Backend dependencies
+  - package-ecosystem: "pip"
+    directory: "/saas3d/api"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+
+  # Frontend dependencies
+  - package-ecosystem: "npm"
+    directory: "/saas3d/frontend"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
