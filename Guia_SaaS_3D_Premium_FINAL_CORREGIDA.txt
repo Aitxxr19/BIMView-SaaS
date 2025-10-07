@@ -1,0 +1,959 @@
+Guía premium para construir tu plataforma SaaS 3D
+desde cero
+
+Proyecto: Conversión de nubes de puntos 3D (.ply) a mallas 3D (.obj/.glb) con suscripción
+
+Duración: 20 días (8h/día) • Español técnico • Código listo para copiar/pegar
+
+Diagrama general (texto):
+
+[Frontend (Next.js)] → [API (FastAPI)] → [DB (PostgreSQL)]
+                              ↓
+                    [S3/MinIO: archivos] [Redis + Celery: workers]
+                              ↓
+                    [Stripe: pagos/planes]
+
+Día 1: Arquitectura y entorno de trabajo
+
+Objetivos:
+• Definir arquitectura (frontend, backend, workers, DB, almacenamiento, pagos).
+• Instalar Python, Node.js, Docker, VS Code, Git.
+• Inicializar monorepo con /api, /frontend y /infra.
+
+Tareas:
+
+1. Crear diagrama y ADR de decisiones clave.
+   - Autenticación con JWT, colas con Celery, archivos en S3/MinIO.
+   - Variables .env y secretos.
+
+2. Inicializar repo y carpetas.
+   ```bash
+   mkdir -p saas3d/{api,frontend,infra}
+   cd saas3d
+   git init
+   echo 'NEXT_PUBLIC_API_URL=http://localhost:8000' > .env.example
+   ```
+
+3. Preparar entornos de trabajo.
+   - Python 3.11+, Node 18+, Docker, extensiones VS Code.
+
+Entregables:
+- Diagrama de arquitectura
+- Repo inicializado
+- Entornos configurados
+
+Día 2: Primer backend con FastAPI
+
+Objetivos:
+• Crear API FastAPI con endpoints /ping y /echo.
+• Documentación OpenAPI en /docs.
+• Ejecutar con Uvicorn en modo recarga.
+
+Tareas:
+
+1. Crear entorno e instalar dependencias.
+   ```bash
+   cd api
+   python -m venv venv
+   source venv/bin/activate  # En Windows: venv\Scripts\activate
+   pip install fastapi uvicorn[standard]
+   ```
+
+2. Implementar main.py con rutas básicas.
+   ```python
+   from fastapi import FastAPI, Request
+
+   app = FastAPI()
+
+   @app.get('/ping')
+   def ping():
+       return {'message': 'pong'}
+
+   @app.post('/echo')
+   async def echo(req: Request):
+       return {'received': await req.json()}
+   ```
+
+3. Ejecutar y probar.
+   ```bash
+   uvicorn main:app --reload
+   ```
+
+Entregables:
+- API básica funcionando
+- Endpoints /ping y /echo
+- Documentación en /docs
+
+Día 3: Registro y login con JWT
+
+Objetivos:
+• Modelo User con SQLAlchemy.
+• Endpoints /register y /login con bcrypt.
+• Generación de JWT (HS256).
+
+Tareas:
+
+1. Instalar librerías: jose, passlib, sqlalchemy, psycopg2-binary.
+   ```bash
+   pip install 'python-jose[cryptography]' 'passlib[bcrypt]' sqlalchemy psycopg2-binary
+   ```
+
+2. Config database.py y models.py (User).
+   ```python
+   # database.py
+   from sqlalchemy import create_engine
+   from sqlalchemy.orm import sessionmaker, declarative_base
+
+   DATABASE_URL = 'postgresql://postgres:postgres@localhost:5432/saas3d'
+   engine = create_engine(DATABASE_URL)
+   SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+   Base = declarative_base()
+
+   # models.py
+   from sqlalchemy import Column, Integer, String
+   from .database import Base
+
+   class User(Base):
+       __tablename__ = 'users'
+       id = Column(Integer, primary_key=True)
+       email = Column(String, unique=True, index=True)
+       hashed_password = Column(String)
+   ```
+
+3. Hash de contraseñas y helpers JWT.
+   ```python
+   from passlib.context import CryptContext
+   pwd = CryptContext(schemes=['bcrypt'], deprecated='auto')
+
+   def hash_password(p): 
+       return pwd.hash(p)
+
+   def verify_password(p, h): 
+       return pwd.verify(p, h)
+   ```
+
+4. Implementar endpoints /register y /login.
+
+Entregables:
+- Modelo User creado
+- Endpoints de autenticación
+- JWT funcionando
+
+Día 4: Conexión a PostgreSQL con SQLAlchemy
+
+Objetivos:
+• Levantar PostgreSQL (Docker).
+• Configurar engine y sesión en FastAPI.
+• Crear modelos User y Job y migrar tablas.
+
+Tareas:
+
+1. Levantar PostgreSQL con Docker.
+   ```bash
+   docker run --name pg -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=saas3d -p 5432:5432 -d postgres:15
+   ```
+
+2. Configurar DATABASE_URL y database.py.
+   ```bash
+   DATABASE_URL=postgresql://postgres:postgres@localhost:5432/saas3d
+   ```
+
+3. Definir modelos User y Job.
+   ```python
+   from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Text, Enum
+   from sqlalchemy.sql import func
+   from sqlalchemy.orm import relationship
+   from .database import Base
+   import enum
+
+   class JobStatus(str, enum.Enum):
+       queued = 'queued'
+       processing = 'processing'
+       completed = 'completed'
+       failed = 'failed'
+
+   class User(Base):
+       __tablename__ = 'users'
+       id = Column(Integer, primary_key=True)
+       email = Column(String, unique=True, index=True)
+       hashed_password = Column(String)
+       created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+   class Job(Base):
+       __tablename__ = 'jobs'
+       id = Column(Integer, primary_key=True)
+       user_id = Column(Integer, ForeignKey('users.id'))
+       input_key = Column(String, index=True)
+       output_key = Column(String, index=True)
+       status = Column(Enum(JobStatus), default=JobStatus.queued)
+       progress = Column(Integer, default=0)
+       error = Column(Text)
+       task_id = Column(String, index=True)
+       created_at = Column(DateTime(timezone=True), server_default=func.now())
+       finished_at = Column(DateTime(timezone=True))
+       user = relationship('User')
+   ```
+
+4. Crear tablas con Base.metadata.create_all().
+   ```python
+   from .database import Base, engine
+   Base.metadata.create_all(bind=engine)
+   ```
+
+5. Probar CRUD mínimo.
+   ```python
+   from .database import SessionLocal
+   from .models import User
+
+   with SessionLocal() as db:
+       u = User(email='test@example.com', hashed_password='x')
+       db.add(u)
+       db.commit()
+       db.refresh(u)
+       print(u.id, u.email)
+   ```
+
+Entregables:
+- PostgreSQL funcionando
+- Modelos creados
+- Tablas migradas
+
+Día 5: Frontend con Next.js + Tailwind
+
+Objetivos:
+• Inicializar Next.js 14 (app router).
+• Configurar TailwindCSS.
+• Páginas /login, /register, /dashboard con UI base.
+
+Tareas:
+
+1. Crear proyecto Next.js e instalar Tailwind.
+   ```bash
+   cd ../frontend
+   npx create-next-app@latest .
+   npm i -D tailwindcss postcss autoprefixer
+   npx tailwindcss init -p
+   ```
+
+2. Configurar Tailwind y estilos base.
+   ```javascript
+   // tailwind.config.js
+   module.exports = {
+       content: [
+           './app/**/*.{js,ts,jsx,tsx}',
+           './components/**/*.{js,ts,jsx,tsx}'
+       ],
+       theme: { extend: {} },
+       plugins: []
+   };
+
+   // globals.css
+   @tailwind base;
+   @tailwind components;
+   @tailwind utilities;
+   ```
+
+3. Crear páginas y componentes de formularios.
+   ```tsx
+   // app/login/page.tsx (ejemplo mínimo)
+   'use client'
+   import { useState } from 'react'
+
+   export default function Page() {
+       const [email, setEmail] = useState('')
+       const [password, setPassword] = useState('')
+
+       const submit = async (e: any) => {
+           e.preventDefault()
+           // fetch a API
+       }
+
+       return (
+           <div className='max-w-sm mx-auto p-6'>
+               <h1 className='text-xl font-bold mb-4'>Iniciar sesión</h1>
+               <form onSubmit={submit} className='space-y-3'>
+                   <input 
+                       className='border w-full p-2' 
+                       placeholder='Email' 
+                       value={email} 
+                       onChange={e => setEmail(e.target.value)} 
+                   />
+                   <input 
+                       type='password' 
+                       className='border w-full p-2' 
+                       placeholder='Contraseña' 
+                       value={password} 
+                       onChange={e => setPassword(e.target.value)} 
+                   />
+                   <button className='bg-black text-white px-4 py-2 rounded'>
+                       Entrar
+                   </button>
+               </form>
+           </div>
+       )
+   }
+   ```
+
+4. Probar navegación y estados.
+
+Entregables:
+- Next.js configurado
+- Tailwind funcionando
+- Páginas básicas creadas
+
+Día 6: Conexión frontend-backend (login)
+
+Objetivos:
+• Conectar formularios a FastAPI.
+• Persistir sesión (cookie httpOnly o localStorage).
+• Proteger rutas.
+
+Tareas:
+
+1. Crear cliente API en frontend y variables de entorno.
+   ```typescript
+   // lib/api.ts
+   export async function api(path: string, init: RequestInit = {}) {
+       const res = await fetch(process.env.NEXT_PUBLIC_API_URL + path, {
+           credentials: 'include',
+           headers: {
+               'Content-Type': 'application/json',
+               ...(init.headers || {})
+           },
+           ...init
+       })
+       if (!res.ok) throw new Error(await res.text())
+       return res.json()
+   }
+
+   // app/login/actions.ts
+   'use server'
+   export async function login(email: string, password: string) {
+       const r = await fetch(process.env.NEXT_PUBLIC_API_URL + '/login', {
+           method: 'POST',
+           headers: { 'Content-Type': 'application/json' },
+           body: JSON.stringify({ email, password })
+       })
+       return r.json()
+   }
+   ```
+
+2. Implementar login/registro con manejo de errores.
+
+3. Redirigir a /dashboard y proteger rutas.
+
+Entregables:
+- Formularios conectados
+- Sesión persistente
+- Rutas protegidas
+
+Día 7: Subida de archivos desde el frontend
+
+Objetivos:
+• Subir .ply usando multipart/form-data.
+• Validar tamaño y extensión.
+• Guardar archivo en backend o S3.
+
+Tareas:
+
+1. Crear componente de subida (drag & drop).
+
+2. Endpoint /upload en FastAPI (UploadFile).
+   ```python
+   from fastapi import UploadFile, File
+   from fastapi import APIRouter
+   import os
+
+   router = APIRouter()
+
+   @router.post('/upload')
+   async def upload(file: UploadFile = File(...)):
+       if not file.filename.endswith('.ply'):
+           return {'error': 'Solo .ply'}
+       
+       os.makedirs('data/in', exist_ok=True)
+       path = f'data/in/{file.filename}'
+       
+       with open(path, 'wb') as f:
+           f.write(await file.read())
+       
+       return {'filename': file.filename, 'path': path}
+   ```
+
+3. Mostrar progreso y resultado en UI.
+
+Entregables:
+- Componente de subida
+- Endpoint /upload
+- Validación de archivos
+
+Día 8: Procesamiento 3D con Open3D
+
+Objetivos:
+• Leer PLY y estimar normales.
+• Reconstruir malla (Poisson) y simplificar.
+• Exportar OBJ.
+
+Tareas:
+
+1. Instalar open3d.
+   ```bash
+   pip install open3d
+   ```
+
+2. Crear función convert_pointcloud_to_mesh().
+   ```python
+   import open3d as o3d
+
+   def convert_pointcloud_to_mesh(ply_path: str, out_obj: str):
+       pcd = o3d.io.read_point_cloud(ply_path)
+       pcd.estimate_normals()
+       mesh, _ = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(pcd, depth=9)
+       mesh = mesh.remove_unreferenced_vertices()
+       mesh = mesh.simplify_quadric_decimation(target_number_of_triangles=150000)
+       o3d.io.write_triangle_mesh(out_obj, mesh)
+       return out_obj
+   ```
+
+3. Integrar endpoint /convert sincrónico.
+   ```python
+   from fastapi import Body
+
+   @router.post('/convert')
+   def convert_api(ply_path: str = Body(...)):
+       out = 'data/out/result.obj'
+       convert_pointcloud_to_mesh(ply_path, out)
+       return {'out': out}
+   ```
+
+Entregables:
+- Función de conversión
+- Endpoint /convert
+- Procesamiento 3D funcionando
+
+Día 9: Asincronía con Celery y Redis
+
+Objetivos:
+• Mover conversión a worker Celery.
+• Configurar Redis como broker/backend.
+• Consultar estado de tareas.
+
+Tareas:
+
+1. Instalar celery[redis] y redis-py.
+   ```bash
+   pip install 'celery[redis]' redis
+   ```
+
+2. Definir celery_app y tarea convert_task.
+   ```python
+   # celery_app.py
+   from celery import Celery
+
+   celery_app = Celery(
+       'saas3d',
+       broker='redis://localhost:6379/0',
+       backend='redis://localhost:6379/1'
+   )
+
+   # tasks.py
+   from .celery_app import celery_app
+   from .convert import convert_pointcloud_to_mesh
+
+   @celery_app.task(bind=True)
+   def convert_task(self, ply_path, out_obj):
+       return convert_pointcloud_to_mesh(ply_path, out_obj)
+   ```
+
+3. Endpoints para crear job y consultar estado.
+
+Entregables:
+- Celery configurado
+- Tareas asíncronas
+- Redis funcionando
+
+Día 10: Guardar trabajos en la base de datos
+
+Objetivos:
+• Persistir Job al crear tarea.
+• Actualizar estado al completar/errar.
+• Listar Jobs por usuario.
+
+Tareas:
+
+1. Ampliar modelo Job (progreso/fechas).
+
+2. Repositorio de Jobs (create/update/find).
+   ```python
+   # repo_jobs.py
+   from .models import Job, JobStatus
+   from .database import SessionLocal
+   from datetime import datetime
+
+   def create_job(db, user_id, input_key, task_id):
+       job = Job(
+           user_id=user_id,
+           input_key=input_key,
+           status=JobStatus.queued,
+           task_id=task_id
+       )
+       db.add(job)
+       db.commit()
+       db.refresh(job)
+       return job
+
+   def complete_job(db, job: Job, output_key: str):
+       job.status = JobStatus.completed
+       job.output_key = output_key
+       job.finished_at = datetime.utcnow()
+       db.commit()
+       db.refresh(job)
+       return job
+   ```
+
+3. Endpoints /jobs (GET, GET/{id}).
+
+Entregables:
+- Jobs persistidos en DB
+- Estados actualizados
+- Endpoints de consulta
+
+Día 11: Dashboard de usuario (frontend)
+
+Objetivos:
+• Listar trabajos con estado y fechas.
+• Descargar resultados listos.
+• Polling periódico.
+
+Tareas:
+
+1. Crear vista Dashboard con tabla/cards.
+   ```tsx
+   // app/dashboard/page.tsx
+   'use client'
+   import { useEffect, useState } from 'react'
+
+   export default function Page() {
+       const [jobs, setJobs] = useState([])
+
+       useEffect(() => {
+           const tick = () => {
+               fetch(process.env.NEXT_PUBLIC_API_URL + '/jobs')
+                   .then(r => r.json())
+                   .then(setJobs)
+           }
+           tick()
+           const id = setInterval(tick, 5000)
+           return () => clearInterval(id)
+       }, [])
+
+       return (
+           <div className='p-6'>
+               <h1 className='text-xl font-bold mb-4'>Mis trabajos</h1>
+               <table className='w-full border'>
+                   <thead>
+                       <tr>
+                           <th>Archivo</th>
+                           <th>Estado</th>
+                           <th>Fecha</th>
+                           <th>Acción</th>
+                       </tr>
+                   </thead>
+                   <tbody>
+                       {jobs.map((j: any) => (
+                           <tr key={j.id}>
+                               <td>{j.input_key}</td>
+                               <td>{j.status}</td>
+                               <td>{j.created_at}</td>
+                               <td>
+                                   {j.output_key ? (
+                                       <a href={j.download_url}>Descargar</a>
+                                   ) : (
+                                       '-'
+                                   )}
+                               </td>
+                           </tr>
+                       ))}
+                   </tbody>
+               </table>
+           </div>
+       )
+   }
+   ```
+
+2. Llamar a /jobs y /jobs/{id}.
+
+3. Botón de descarga si status=completed.
+
+Entregables:
+- Dashboard funcional
+- Lista de trabajos
+- Descargas funcionando
+
+Día 12: Almacenamiento en S3 o MinIO
+
+Objetivos:
+• Subir y servir archivos con S3/MinIO.
+• Usar URLs firmadas para seguridad.
+• Separar buckets/prefijos.
+
+Tareas:
+
+1. Configurar cliente (boto3/minio).
+   ```bash
+   pip install boto3
+   ```
+
+2. Generar pre-signed URL para subida/descarga.
+   ```python
+   import boto3
+
+   s3 = boto3.client(
+       's3',
+       endpoint_url='http://localhost:9000',
+       aws_access_key_id='minio',
+       aws_secret_access_key='minio123'
+   )
+
+   url = s3.generate_presigned_url(
+       'get_object',
+       Params={'Bucket': 'saas3d', 'Key': 'out/mesh.obj'},
+       ExpiresIn=600
+   )
+   ```
+
+3. Guardar claves en Job.
+
+Entregables:
+- S3/MinIO configurado
+- URLs firmadas
+- Archivos seguros
+
+Día 13: Integración de Stripe
+
+Objetivos:
+• Checkout Session para suscripción.
+• Webhook para activar plan.
+• Proteger funciones tras pago.
+
+Tareas:
+
+1. Instalar stripe y configurar claves.
+   ```bash
+   pip install stripe
+   ```
+
+2. Endpoint /billing/checkout (crear sesión).
+   ```python
+   import stripe
+   from fastapi import Request, HTTPException
+
+   stripe.api_key = 'sk_test_xxx'
+
+   @app.post('/billing/checkout')
+   def checkout():
+       session = stripe.checkout.Session.create(
+           mode='subscription',
+           line_items=[{'price': 'price_123', 'quantity': 1}],
+           success_url='http://localhost:3000/success?sid={CHECKOUT_SESSION_ID}',
+           cancel_url='http://localhost:3000/cancel'
+       )
+       return {'url': session.url}
+   ```
+
+3. Webhook checkout.session.completed → activar plan.
+   ```python
+   @app.post('/webhooks/stripe')
+   async def wh(req: Request):
+       payload = await req.body()
+       sig = req.headers.get('stripe-signature')
+       
+       try:
+           event = stripe.Webhook.construct_event(payload, sig, 'whsec_xxx')
+       except Exception as e:
+           raise HTTPException(400, str(e))
+       
+       if event['type'] == 'checkout.session.completed':
+           email = event['data']['object']['customer_details']['email']
+           # activar plan para el usuario con ese email
+       
+       return {'received': True}
+   ```
+
+Entregables:
+- Stripe integrado
+- Checkout funcionando
+- Webhooks activos
+
+Día 14: Lógica de planes y restricciones
+
+Objetivos:
+• Restringir endpoints según plan activo.
+• Aplicar cuota mensual (trabajos/mes).
+• Mensajes claros de bloqueo.
+
+Tareas:
+
+1. Modelo Subscription o flags en User.
+
+2. Dependencia FastAPI para validar plan/cuota.
+   ```python
+   from fastapi import Depends, HTTPException
+
+   def require_active_plan(user = Depends(get_current_user)):
+       if not user.plan_active:
+           raise HTTPException(402, 'Requiere suscripción activa')
+       return user
+
+   @app.post('/jobs', dependencies=[Depends(require_active_plan)])
+   def create_job_auth(...):
+       ...
+   ```
+
+3. Mostrar en UI cuota restante y upsell.
+
+Entregables:
+- Restricciones por plan
+- Cuotas implementadas
+- UI de planes
+
+Día 15: Dockeriza todo el proyecto
+
+Objetivos:
+• Dockerfile para API y Frontend.
+• docker-compose con Redis, PG, MinIO, Worker.
+• Variables y volúmenes.
+
+Tareas:
+
+1. Dockerfile API (multi-stage).
+   ```dockerfile
+   # api/Dockerfile
+   FROM python:3.11-slim AS base
+   WORKDIR /app
+   COPY api/requirements.txt .
+   RUN pip install -r requirements.txt
+   COPY api/ .
+   CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+   ```
+
+2. Dockerfile Frontend.
+   ```dockerfile
+   # frontend/Dockerfile
+   FROM node:18-alpine AS build
+   WORKDIR /app
+   COPY frontend/package*.json .
+   RUN npm i
+   COPY frontend/ .
+   RUN npm run build
+   EXPOSE 3000
+   CMD ["npm", "start"]
+   ```
+
+3. docker-compose.yml con servicios y redes.
+   ```yaml
+   # infra/docker-compose.yml (extracto)
+   services:
+     api:
+       build: ../api
+       ports: ["8000:8000"]
+       environment:
+         - DATABASE_URL=${DATABASE_URL}
+         - REDIS_URL=${REDIS_URL}
+     
+     worker:
+       build: ../api
+       command: celery -A app.celery_app worker -l info
+       depends_on: [api, redis]
+     
+     redis:
+       image: redis:7
+       ports: ["6379:6379"]
+     
+     db:
+       image: postgres:15
+       environment:
+         - POSTGRES_PASSWORD=postgres
+         - POSTGRES_DB=saas3d
+       ports: ["5432:5432"]
+   ```
+
+Entregables:
+- Dockerfiles creados
+- docker-compose funcionando
+- Contenedores corriendo
+
+Día 16: Despliegue en Railway y Vercel
+
+Objetivos:
+• Publicar API/DB/Redis en Railway.
+• Frontend en Vercel.
+• CORS/HTTPS y variables.
+
+Tareas:
+
+1. Crear proyectos Railway (API, DB, Redis).
+
+2. Configurar variables y secrets.
+   ```python
+   # Ejemplo CORS en FastAPI
+   from fastapi.middleware.cors import CORSMiddleware
+
+   app.add_middleware(
+       CORSMiddleware,
+       allow_origins=['https://tu-dominio.vercel.app'],
+       allow_credentials=True,
+       allow_methods=['*'],
+       allow_headers=['*']
+   )
+   ```
+
+3. Deploy de Next.js en Vercel con NEXT_PUBLIC_API_URL.
+
+Entregables:
+- API en Railway
+- Frontend en Vercel
+- CORS configurado
+
+Día 17: Logs y manejo de errores
+
+Objetivos:
+• Logging estructurado en backend.
+• Retries en Celery.
+• Mensajes claros en UI.
+
+Tareas:
+
+1. Configurar logging en FastAPI (JSON).
+   ```python
+   import logging
+   import sys
+   import json
+
+   class JsonFormatter(logging.Formatter):
+       def format(self, record):
+           return json.dumps({
+               "lvl": record.levelname,
+               "msg": record.getMessage()
+           })
+
+   logger = logging.getLogger('api')
+   h = logging.StreamHandler(sys.stdout)
+   h.setFormatter(JsonFormatter())
+   logger.addHandler(h)
+   logger.setLevel(logging.INFO)
+   ```
+
+2. Retry/backoff en tareas Celery.
+   ```python
+   from celery import Celery
+
+   @celery_app.task(
+       bind=True,
+       autoretry_for=(Exception,),
+       retry_backoff=True,
+       max_retries=3
+   )
+   def convert_task(self, ply_path, out_obj):
+       return convert_pointcloud_to_mesh(ply_path, out_obj)
+   ```
+
+3. Toasts/alerts y manejo de errores en frontend.
+
+Entregables:
+- Logging estructurado
+- Retries en Celery
+- Manejo de errores en UI
+
+Día 18: Pruebas y depuración final
+
+Objetivos:
+• Tests unitarios/integración en API.
+• E2E con Playwright.
+• Smoke test de carga.
+
+Tareas:
+
+1. Configurar pytest con DB de prueba.
+   ```bash
+   pip install pytest httpx pytest-asyncio
+   ```
+
+2. Tests de /register, /login, /jobs.
+   ```python
+   def test_ping(client):
+       r = client.get('/ping')
+       assert r.status_code == 200 and r.json()['message'] == 'pong'
+   ```
+
+3. Playwright: login, subida, dashboard, descarga.
+
+Entregables:
+- Tests unitarios
+- Tests E2E
+- Cobertura de código
+
+Día 19: Mejoras visuales y UX
+
+Objetivos:
+• Skeletons, loaders, toasts y estados vacíos.
+• Accesibilidad (focus, labels, contrastes).
+• Responsive y dark mode.
+
+Tareas:
+
+1. Componentes de feedback (skeletons/spinners/toasts).
+   ```tsx
+   // Ejemplo de skeleton simple (Tailwind)
+   <div className='animate-pulse space-y-2'>
+       <div className='h-4 bg-gray-300 rounded w-3/4'></div>
+       <div className='h-4 bg-gray-300 rounded w-1/2'></div>
+   </div>
+   ```
+
+2. Validaciones y mensajes claros.
+
+3. Ajustes responsive y accesibilidad.
+
+Entregables:
+- UI mejorada
+- Componentes de feedback
+- Accesibilidad implementada
+
+Día 20: Documentación y resumen final
+
+Objetivos:
+• README con instalación, uso y despliegue.
+• Export OpenAPI y colecciones de pruebas.
+• Video/demo final.
+
+Tareas:
+
+1. Completar README con comandos y .env.
+   ```markdown
+   # README (extracto)
+   ## Desarrollo
+
+   1) cd api && uvicorn main:app --reload
+   2) cd frontend && npm run dev
+
+   ## Variables
+
+   - NEXT_PUBLIC_API_URL
+   - DATABASE_URL
+   - STRIPE_SECRET
+   - S3 configs
+   ```
+
+2. Exportar OpenAPI.json y colección de Insomnia/Postman.
+
+3. Grabar demo del flujo completo.
+
+Entregables:
+- README completo
+- Documentación API
+- Demo final
+
+---
+
+Este documento proporciona una guía completa de 20 días para construir una plataforma SaaS 3D desde cero, con código listo para copiar y pegar, y una estructura clara de objetivos, tareas y entregables para cada día. 

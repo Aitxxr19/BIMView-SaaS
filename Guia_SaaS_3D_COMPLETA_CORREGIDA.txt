@@ -1,0 +1,1084 @@
+Guía premium para construir tu plataforma SaaS 3D
+CON INTEGRACIÓN GITHUB DESDE EL INICIO - VERSIÓN COMPLETA
+
+Proyecto: Conversión de nubes de puntos 3D (.ply) a mallas 3D (.obj/.glb) con suscripción
+Duración: 25 días (8h/día) • Español técnico • Código listo para copiar/pegar
+
+DIAGRAMA GENERAL:
+[Frontend (Next.js)] → [API (FastAPI)] → [DB (PostgreSQL)]
+                              ↓
+                    [S3/MinIO: archivos] [Redis + Celery: workers]
+                              ↓
+                    [Stripe: pagos/planes]
+                              ↓
+                    [GitHub Actions: CI/CD] → [Railway + Vercel]
+
+=== DÍA 1: ARQUITECTURA + GITHUB SETUP ===
+
+Objetivos: Definir arquitectura completa y configurar GitHub desde el inicio
+
+Tareas:
+1. Crear repositorio GitHub profesional
+2. Estructura de carpetas: saas3d/{api,frontend,infra,docs,tests}
+3. .gitignore completo para Python, Node.js, IDEs, OS
+4. README.md con badges, características, stack tecnológico
+5. Ramas de desarrollo: main, develop, feature/*
+
+Código clave:
+```bash
+# Estructura
+mkdir -p .github/{workflows,ISSUE_TEMPLATE}
+git checkout -b develop
+git checkout -b feature/authentication
+```
+
+Entregables: Repositorio GitHub configurado, estructura profesional, README con badges
+
+=== DÍA 2: BACKEND BÁSICO + TEMPLATES ===
+
+Objetivos: Crear API FastAPI básica y configurar templates de GitHub
+
+Tareas:
+1. FastAPI básico con endpoints /, /health
+2. Crear requirements.txt con dependencias básicas
+3. Templates para Issues (bug_report.md, feature_request.md)
+4. Template para Pull Requests
+5. Dependabot para actualizaciones automáticas
+6. CONTRIBUTING.md con guía de contribución
+
+Código clave:
+```python
+# api/main.py
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI(title="BIMView API", version="1.0.0")
+app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:3000"])
+
+@app.get("/")
+def read_root():
+    return {"message": "BIMView API", "status": "running"}
+
+@app.get("/health")
+def health_check():
+    return {"status": "healthy"}
+```
+
+```txt
+# api/requirements.txt
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pytest==7.4.3
+pytest-asyncio==0.21.1
+httpx==0.25.2
+coverage==7.3.2
+pytest-cov==4.1.0
+```
+
+Entregables: API FastAPI básica, templates de GitHub, Dependabot configurado
+
+=== DÍA 3: TESTS + CI/CD BÁSICO ===
+
+Objetivos: Crear tests unitarios y configurar GitHub Actions
+
+Tareas:
+1. Tests unitarios con pytest
+2. GitHub Actions para API con tests automáticos
+3. CodeQL para análisis de seguridad
+4. Cobertura de código con codecov
+5. Workflow de CI/CD básico
+
+Código clave:
+```python
+# api/tests/test_main.py
+import pytest
+from fastapi.testclient import TestClient
+from main import app
+
+client = TestClient(app)
+
+def test_read_root():
+    response = client.get("/")
+    assert response.status_code == 200
+    assert response.json()["message"] == "BIMView API"
+
+def test_health_check():
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json()["status"] == "healthy"
+```
+
+```yaml
+# .github/workflows/api.yml
+name: API Tests
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with: python-version: '3.11'
+      - name: Install dependencies
+        run: cd api && pip install -r requirements.txt
+      - name: Run tests
+        run: cd api && pytest tests/ -v --cov=. --cov-report=xml
+```
+
+Entregables: Tests unitarios, CI/CD básico, análisis de seguridad
+
+=== DÍA 4: REGISTRO Y LOGIN CON JWT ===
+
+Objetivos: Implementar autenticación con JWT y bcrypt
+
+Tareas:
+1. Configurar database.py con SQLAlchemy
+2. Modelo User con SQLAlchemy
+3. Hash de contraseñas con bcrypt
+4. Endpoints /register y /login con JWT
+5. Instalar dependencias: jose, passlib, sqlalchemy, psycopg2-binary
+
+Código clave:
+```python
+# api/database.py
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, declarative_base
+
+DATABASE_URL = 'postgresql://postgres:postgres@localhost:5432/saas3d'
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+# api/models.py
+from sqlalchemy import Column, Integer, String
+from database import Base
+
+class User(Base):
+    __tablename__ = 'users'
+    id = Column(Integer, primary_key=True)
+    email = Column(String, unique=True, index=True)
+    hashed_password = Column(String)
+```
+
+Entregables: Modelo User, endpoints de autenticación, JWT funcionando
+
+=== DÍA 5: CONEXIÓN A POSTGRESQL ===
+
+Objetivos: Configurar PostgreSQL y crear modelos completos
+
+Tareas:
+1. Levantar PostgreSQL con Docker
+2. Configurar DATABASE_URL
+3. Modelos User y Job con relaciones
+4. Estados de trabajo (queued, processing, completed, failed)
+5. Crear tablas con Base.metadata.create_all()
+
+Código clave:
+```bash
+# Docker PostgreSQL
+docker run --name pg -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=saas3d -p 5432:5432 -d postgres:15
+```
+
+```python
+# api/models.py
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Text, Enum
+from sqlalchemy.sql import func
+from sqlalchemy.orm import relationship
+import enum
+
+class JobStatus(str, enum.Enum):
+    queued = 'queued'
+    processing = 'processing'
+    completed = 'completed'
+    failed = 'failed'
+
+class Job(Base):
+    __tablename__ = 'jobs'
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'))
+    input_key = Column(String, index=True)
+    output_key = Column(String, index=True)
+    status = Column(Enum(JobStatus), default=JobStatus.queued)
+    progress = Column(Integer, default=0)
+    error = Column(Text)
+    task_id = Column(String, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    finished_at = Column(DateTime(timezone=True))
+    user = relationship('User')
+```
+
+Entregables: PostgreSQL funcionando, modelos creados, tablas migradas
+
+=== DÍA 6: FRONTEND CON NEXT.JS + TAILWIND ===
+
+Objetivos: Crear frontend moderno con Next.js 14 y TailwindCSS
+
+Tareas:
+1. Inicializar Next.js 14 con App Router
+2. Configurar TailwindCSS
+3. Crear package.json con scripts
+4. Páginas /login, /register, /dashboard
+5. Componentes de formularios
+6. Navegación y estados
+
+Código clave:
+```bash
+# Crear proyecto Next.js
+cd frontend
+npx create-next-app@latest .
+npm i -D tailwindcss postcss autoprefixer
+npx tailwindcss init -p
+```
+
+```javascript
+// tailwind.config.js
+module.exports = {
+  content: [
+    './app/**/*.{js,ts,jsx,tsx}',
+    './components/**/*.{js,ts,jsx,tsx}'
+  ],
+  theme: { extend: {} },
+  plugins: []
+}
+
+// postcss.config.js
+module.exports = {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {},
+  },
+}
+```
+
+```tsx
+// app/login/page.tsx
+'use client'
+import { useState } from 'react'
+
+export default function Page() {
+    const [email, setEmail] = useState('')
+    const [password, setPassword] = useState('')
+
+    const submit = async (e: any) => {
+        e.preventDefault()
+        // fetch a API
+    }
+
+    return (
+        <div className='max-w-sm mx-auto p-6'>
+            <h1 className='text-xl font-bold mb-4'>Iniciar sesión</h1>
+            <form onSubmit={submit} className='space-y-3'>
+                <input 
+                    className='border w-full p-2' 
+                    placeholder='Email' 
+                    value={email} 
+                    onChange={e => setEmail(e.target.value)} 
+                />
+                <input 
+                    type='password' 
+                    className='border w-full p-2' 
+                    placeholder='Contraseña' 
+                    value={password} 
+                    onChange={e => setPassword(e.target.value)} 
+                />
+                <button className='bg-black text-white px-4 py-2 rounded'>
+                    Entrar
+                </button>
+            </form>
+        </div>
+    )
+}
+```
+
+Entregables: Next.js configurado, Tailwind funcionando, páginas básicas
+
+=== DÍA 7: CONEXIÓN FRONTEND-BACKEND ===
+
+Objetivos: Conectar formularios a FastAPI y persistir sesión
+
+Tareas:
+1. Cliente API en frontend
+2. Variables de entorno
+3. Login/registro con manejo de errores
+4. Persistencia de sesión (localStorage)
+5. Protección de rutas
+
+Código clave:
+```typescript
+// lib/api.ts
+export async function api(path: string, init: RequestInit = {}) {
+    const res = await fetch(process.env.NEXT_PUBLIC_API_URL + path, {
+        credentials: 'include',
+        headers: {
+            'Content-Type': 'application/json',
+            ...(init.headers || {})
+        },
+        ...init
+    })
+    if (!res.ok) throw new Error(await res.text())
+    return res.json()
+}
+
+// app/login/actions.ts
+'use server'
+export async function login(email: string, password: string) {
+    const r = await fetch(process.env.NEXT_PUBLIC_API_URL + '/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+    })
+    return r.json()
+}
+```
+
+Entregables: Formularios conectados, sesión persistente, rutas protegidas
+
+=== DÍA 8: SUBIDA DE ARCHIVOS ===
+
+Objetivos: Implementar subida de archivos .ply con validación
+
+Tareas:
+1. Componente de subida (drag & drop)
+2. Endpoint /upload en FastAPI
+3. Instalar python-multipart para UploadFile
+4. Validación de tamaño y extensión
+5. Guardar archivo en backend
+6. Mostrar progreso en UI
+
+Código clave:
+```python
+# api/routes/upload.py
+from fastapi import UploadFile, File, APIRouter
+import os
+
+router = APIRouter()
+
+@router.post('/upload')
+async def upload(file: UploadFile = File(...)):
+    if not file.filename.endswith('.ply'):
+        return {'error': 'Solo archivos .ply'}
+    
+    os.makedirs('data/in', exist_ok=True)
+    path = f'data/in/{file.filename}'
+    
+    with open(path, 'wb') as f:
+        f.write(await file.read())
+    
+    return {'filename': file.filename, 'path': path}
+```
+
+Entregables: Componente de subida, endpoint /upload, validación de archivos
+
+=== DÍA 9: PROCESAMIENTO 3D CON OPEN3D ===
+
+Objetivos: Implementar conversión de nubes de puntos a mallas 3D
+
+Tareas:
+1. Instalar open3d
+2. Añadir open3d a requirements.txt
+3. Función convert_pointcloud_to_mesh()
+4. Algoritmo Poisson con simplificación
+5. Exportar OBJ
+6. Endpoint /convert sincrónico
+
+Código clave:
+```python
+# api/convert.py
+import open3d as o3d
+
+def convert_pointcloud_to_mesh(ply_path: str, out_obj: str):
+    pcd = o3d.io.read_point_cloud(ply_path)
+    pcd.estimate_normals()
+    mesh, _ = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(pcd, depth=9)
+    mesh = mesh.remove_unreferenced_vertices()
+    mesh = mesh.simplify_quadric_decimation(target_number_of_triangles=150000)
+    o3d.io.write_triangle_mesh(out_obj, mesh)
+    return out_obj
+
+# api/routes/convert.py
+from fastapi import Body
+
+@router.post('/convert')
+def convert_api(ply_path: str = Body(...)):
+    out = 'data/out/result.obj'
+    convert_pointcloud_to_mesh(ply_path, out)
+    return {'out': out}
+```
+
+Entregables: Función de conversión, endpoint /convert, procesamiento 3D
+
+=== DÍA 10: ASINCRONÍA CON CELERY Y REDIS ===
+
+Objetivos: Mover conversión a worker Celery para procesamiento asíncrono
+
+Tareas:
+1. Instalar celery[redis] y redis-py
+2. Configurar celery_app
+3. Tarea convert_task
+4. Configurar worker de Celery en workflow
+5. Endpoints para crear job y consultar estado
+6. Redis como broker/backend
+
+Código clave:
+```python
+# api/celery_app.py
+from celery import Celery
+
+celery_app = Celery(
+    'saas3d',
+    broker='redis://localhost:6379/0',
+    backend='redis://localhost:6379/1'
+)
+
+# api/tasks.py
+from .celery_app import celery_app
+from .convert import convert_pointcloud_to_mesh
+
+@celery_app.task(bind=True)
+def convert_task(self, ply_path, out_obj):
+    return convert_pointcloud_to_mesh(ply_path, out_obj)
+```
+
+```bash
+# Levantar Redis
+docker run --name redis -p 6379:6379 -d redis:7
+
+# Ejecutar worker de Celery
+cd api
+celery -A celery_app worker --loglevel=info
+```
+
+Entregables: Celery configurado, tareas asíncronas, Redis funcionando
+
+=== DÍA 11: GUARDAR TRABAJOS EN LA BASE DE DATOS ===
+
+Objetivos: Persistir Jobs y actualizar estados
+
+Tareas:
+1. Repositorio de Jobs (create/update/find)
+2. Persistir Job al crear tarea
+3. Actualizar estado al completar/errar
+4. Endpoints /jobs (GET, GET/{id})
+5. Listar Jobs por usuario
+
+Código clave:
+```python
+# api/repo_jobs.py
+from .models import Job, JobStatus
+from .database import SessionLocal
+from datetime import datetime
+
+def create_job(db, user_id, input_key, task_id):
+    job = Job(
+        user_id=user_id,
+        input_key=input_key,
+        status=JobStatus.queued,
+        task_id=task_id
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    return job
+
+def complete_job(db, job: Job, output_key: str):
+    job.status = JobStatus.completed
+    job.output_key = output_key
+    job.finished_at = datetime.utcnow()
+    db.commit()
+    db.refresh(job)
+    return job
+```
+
+Entregables: Jobs persistidos en DB, estados actualizados, endpoints de consulta
+
+=== DÍA 12: DASHBOARD DE USUARIO ===
+
+Objetivos: Crear dashboard con lista de trabajos y descarga de resultados
+
+Tareas:
+1. Vista Dashboard con tabla/cards
+2. Listar trabajos con estado y fechas
+3. Polling periódico (5 segundos)
+4. Botón de descarga si status=completed
+5. Llamar a /jobs y /jobs/{id}
+
+Código clave:
+```tsx
+// app/dashboard/page.tsx
+'use client'
+import { useEffect, useState } from 'react'
+
+export default function Page() {
+    const [jobs, setJobs] = useState([])
+
+    useEffect(() => {
+        const tick = () => {
+            fetch(process.env.NEXT_PUBLIC_API_URL + '/jobs')
+                .then(r => r.json())
+                .then(setJobs)
+        }
+        tick()
+        const id = setInterval(tick, 5000)
+        return () => clearInterval(id)
+    }, [])
+
+    return (
+        <div className='p-6'>
+            <h1 className='text-xl font-bold mb-4'>Mis trabajos</h1>
+            <table className='w-full border'>
+                <thead>
+                    <tr>
+                        <th>Archivo</th>
+                        <th>Estado</th>
+                        <th>Fecha</th>
+                        <th>Acción</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {jobs.map((j: any) => (
+                        <tr key={j.id}>
+                            <td>{j.input_key}</td>
+                            <td>{j.status}</td>
+                            <td>{j.created_at}</td>
+                            <td>
+                                {j.output_key ? (
+                                    <a href={j.download_url}>Descargar</a>
+                                ) : (
+                                    '-'
+                                )}
+                            </td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </div>
+    )
+}
+```
+
+Entregables: Dashboard funcional, lista de trabajos, descargas funcionando
+
+=== DÍA 13: ALMACENAMIENTO EN S3 O MINIO ===
+
+Objetivos: Configurar almacenamiento de archivos con URLs firmadas
+
+Tareas:
+1. Instalar boto3
+2. Configurar cliente S3/MinIO
+3. Crear buckets en MinIO
+4. Generar pre-signed URL para subida/descarga
+5. Guardar claves en Job
+6. Separar buckets/prefijos
+
+Código clave:
+```python
+# api/storage.py
+import boto3
+
+s3 = boto3.client(
+    's3',
+    endpoint_url='http://localhost:9000',
+    aws_access_key_id='minio',
+    aws_secret_access_key='minio123'
+)
+
+def generate_presigned_url(bucket, key, expiration=600):
+    url = s3.generate_presigned_url(
+        'get_object',
+        Params={'Bucket': bucket, 'Key': key},
+        ExpiresIn=expiration
+    )
+    return url
+```
+
+```bash
+# Levantar MinIO
+docker run --name minio -p 9000:9000 -p 9001:9001 -d minio/minio server /data --console-address ":9001"
+
+# Crear buckets
+docker exec minio mc alias set myminio http://localhost:9000 minio minio123
+docker exec minio mc mb myminio/saas3d-input
+docker exec minio mc mb myminio/saas3d-output
+```
+
+Entregables: S3/MinIO configurado, URLs firmadas, archivos seguros
+
+=== DÍA 14: INTEGRACIÓN DE STRIPE ===
+
+Objetivos: Implementar sistema de pagos y suscripciones
+
+Tareas:
+1. Instalar stripe
+2. Endpoint /billing/checkout
+3. Webhook checkout.session.completed
+4. Activar plan tras pago
+5. Proteger funciones tras pago
+
+Código clave:
+```python
+# api/billing.py
+import stripe
+from fastapi import Request, HTTPException
+
+stripe.api_key = 'sk_test_xxx'
+
+@router.post('/billing/checkout')
+def checkout():
+    session = stripe.checkout.Session.create(
+        mode='subscription',
+        line_items=[{'price': 'price_123', 'quantity': 1}],
+        success_url='http://localhost:3000/success?sid={CHECKOUT_SESSION_ID}',
+        cancel_url='http://localhost:3000/cancel'
+    )
+    return {'url': session.url}
+
+@router.post('/webhooks/stripe')
+async def webhook(req: Request):
+    payload = await req.body()
+    sig = req.headers.get('stripe-signature')
+    
+    try:
+        event = stripe.Webhook.construct_event(payload, sig, 'whsec_xxx')
+    except Exception as e:
+        raise HTTPException(400, str(e))
+    
+    if event['type'] == 'checkout.session.completed':
+        email = event['data']['object']['customer_details']['email']
+        # activar plan para el usuario
+    
+    return {'received': True}
+```
+
+Entregables: Stripe integrado, checkout funcionando, webhooks activos
+
+=== DÍA 15: LÓGICA DE PLANES Y RESTRICCIONES ===
+
+Objetivos: Implementar restricciones por plan y cuotas mensuales
+
+Tareas:
+1. Modelo Subscription o flags en User
+2. Dependencia FastAPI para validar plan/cuota
+3. Aplicar cuota mensual (trabajos/mes)
+4. Mensajes claros de bloqueo
+5. UI de planes y upsell
+
+Código clave:
+```python
+# api/auth.py
+from fastapi import Depends, HTTPException
+
+def require_active_plan(user = Depends(get_current_user)):
+    if not user.plan_active:
+        raise HTTPException(402, 'Requiere suscripción activa')
+    return user
+
+# api/routes/jobs.py
+@app.post('/jobs', dependencies=[Depends(require_active_plan)])
+def create_job_auth(...):
+    # verificar cuota mensual
+    if user.jobs_this_month >= user.plan_limit:
+        raise HTTPException(402, 'Cuota mensual excedida')
+    # crear job
+```
+
+Entregables: Restricciones por plan, cuotas implementadas, UI de planes
+
+=== DÍA 16: DOCKERIZA TODO EL PROYECTO ===
+
+Objetivos: Crear contenedores Docker y docker-compose
+
+Tareas:
+1. Dockerfile para API (multi-stage)
+2. Dockerfile para Frontend
+3. docker-compose.yml con todos los servicios
+4. Variables y volúmenes
+5. Crear .env.example
+6. Redes y dependencias
+
+Código clave:
+```dockerfile
+# api/Dockerfile
+FROM python:3.11-slim AS base
+WORKDIR /app
+COPY api/requirements.txt .
+RUN pip install -r requirements.txt
+COPY api/ .
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+```yaml
+# docker-compose.yml
+services:
+  api:
+    build: ../api
+    ports: ["8000:8000"]
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+  
+  worker:
+    build: ../api
+    command: celery -A app.celery_app worker -l info
+    depends_on: [api, redis]
+  
+  redis:
+    image: redis:7
+    ports: ["6379:6379"]
+  
+  db:
+    image: postgres:15
+    environment:
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=saas3d
+    ports: ["5432:5432"]
+```
+
+```env
+# .env.example
+# Database
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/saas3d
+
+# Redis
+REDIS_URL=redis://localhost:6379/0
+
+# Stripe
+STRIPE_SECRET_KEY=sk_test_xxx
+STRIPE_PUBLISHABLE_KEY=pk_test_xxx
+
+# S3/MinIO
+S3_ACCESS_KEY=minio
+S3_SECRET_KEY=minio123
+S3_ENDPOINT_URL=http://localhost:9000
+
+# JWT
+JWT_SECRET_KEY=your-secret-key-here
+
+# Frontend
+NEXT_PUBLIC_API_URL=http://localhost:8000
+NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_test_xxx
+```
+
+Entregables: Dockerfiles creados, docker-compose funcionando, contenedores corriendo
+
+=== DÍA 17: DESPLIEGUE EN RAILWAY Y VERCEL ===
+
+Objetivos: Publicar en producción con CI/CD automático
+
+Tareas:
+1. Crear proyectos Railway (API, DB, Redis)
+2. Frontend en Vercel
+3. Configurar variables y secrets
+4. Configurar CORS en FastAPI para producción
+5. CORS/HTTPS
+6. Despliegue automático con GitHub Actions
+
+Código clave:
+```python
+# api/main.py (actualizar CORS para producción)
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+import os
+
+app = FastAPI(title="BIMView API", version="1.0.0")
+
+# CORS para desarrollo y producción
+allowed_origins = [
+    "http://localhost:3000",
+    "https://tu-app.vercel.app",
+    "https://tu-dominio.com"
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+```
+
+Entregables: API en Railway, Frontend en Vercel, CORS configurado
+
+=== DÍA 18: LOGS Y MANEJO DE ERRORES ===
+
+Objetivos: Implementar logging estructurado y manejo de errores
+
+Tareas:
+1. Logging estructurado en FastAPI (JSON)
+2. Retries en Celery
+3. Mensajes claros en UI
+4. Toasts/alerts
+5. Manejo de errores en frontend
+
+Código clave:
+```python
+# api/logging.py
+import logging
+import sys
+import json
+
+class JsonFormatter(logging.Formatter):
+    def format(self, record):
+        return json.dumps({
+            "lvl": record.levelname,
+            "msg": record.getMessage()
+        })
+
+logger = logging.getLogger('api')
+h = logging.StreamHandler(sys.stdout)
+h.setFormatter(JsonFormatter())
+logger.addHandler(h)
+logger.setLevel(logging.INFO)
+```
+
+Entregables: Logging estructurado, retries en Celery, manejo de errores en UI
+
+=== DÍA 19: PRUEBAS Y DEPURACIÓN FINAL ===
+
+Objetivos: Implementar testing completo y depuración
+
+Tareas:
+1. Tests unitarios/integración en API
+2. E2E con Playwright
+3. Smoke test de carga
+4. Cobertura de código
+5. Depuración final
+
+Código clave:
+```python
+# api/tests/test_integration.py
+def test_full_conversion_flow():
+    # Test completo: upload -> convert -> download
+    pass
+
+def test_user_registration_and_login():
+    # Test de registro y login
+    pass
+```
+
+Entregables: Tests unitarios, Tests E2E, cobertura de código
+
+=== DÍA 20: MEJORAS VISUALES Y UX ===
+
+Objetivos: Mejorar interfaz y experiencia de usuario
+
+Tareas:
+1. Skeletons, loaders, toasts
+2. Estados vacíos
+3. Accesibilidad (focus, labels, contrastes)
+4. Responsive y dark mode
+5. Validaciones y mensajes claros
+
+Código clave:
+```tsx
+// components/LoadingSkeleton.tsx
+export function LoadingSkeleton() {
+    return (
+        <div className='animate-pulse space-y-2'>
+            <div className='h-4 bg-gray-300 rounded w-3/4'></div>
+            <div className='h-4 bg-gray-300 rounded w-1/2'></div>
+        </div>
+    )
+}
+```
+
+Entregables: UI mejorada, componentes de feedback, accesibilidad implementada
+
+=== DÍA 21: DOCUMENTACIÓN CON GITHUB PAGES ===
+
+Objetivos: Configurar documentación automática con GitHub Pages
+
+Tareas:
+1. Estructura de documentación
+2. GitHub Pages workflow
+3. Documentación de API
+4. CHANGELOG.md
+5. Release Drafter
+
+Código clave:
+```yaml
+# .github/workflows/docs.yml
+name: Deploy Documentation
+on:
+  push:
+    branches: [main]
+    paths: ['docs/**', '*.md']
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+      - name: Build docs
+        run: mkdir -p docs/_site && cp -r docs/* docs/_site/
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/_site
+```
+
+Entregables: GitHub Pages configurado, documentación completa, CHANGELOG automático
+
+=== DÍA 22: MONITOREO Y ALERTAS ===
+
+Objetivos: Configurar monitoreo automático y alertas
+
+Tareas:
+1. Health checks automáticos
+2. Métricas de calidad
+3. SonarCloud para análisis
+4. Codecov para cobertura
+5. Alertas de Slack/Discord
+
+Código clave:
+```yaml
+# .github/workflows/monitoring.yml
+name: Health Monitoring
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # Cada 6 horas
+
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check API health
+        run: |
+          response=$(curl -s -o /dev/null -w "%{http_code}" https://tu-api.railway.app/health)
+          if [ $response -ne 200 ]; then
+            echo "API health check failed: $response"
+            exit 1
+          fi
+```
+
+Entregables: Monitoreo automático, alertas de salud, dashboard de métricas
+
+=== DÍA 23: RELEASES AUTOMÁTICOS ===
+
+Objetivos: Configurar releases automáticos con versionado semántico
+
+Tareas:
+1. Release Drafter
+2. Versionado semántico
+3. Changelog automático
+4. Tags automáticos
+5. Notificaciones de release
+
+Código clave:
+```yaml
+# .github/release-drafter.yml
+name-template: 'v$RESOLVED_VERSION 🌟'
+tag-template: 'v$RESOLVED_VERSION'
+change-template: '- $TITLE @$AUTHOR (#$NUMBER)'
+version-template: '$MAJOR.$MINOR.$PATCH'
+categories:
+  - title: '🚀 Features'
+    labels: ['feature', 'enhancement']
+  - title: '🐛 Bug Fixes'
+    labels: ['fix', 'bugfix', 'bug']
+```
+
+Entregables: Releases automáticos, versionado semántico, changelog automático
+
+=== DÍA 24: MANTENIMIENTO AUTOMATIZADO ===
+
+Objetivos: Configurar limpieza automática y mantenimiento
+
+Tareas:
+1. Stale para limpieza de issues
+2. Reglas de ramas
+3. Renovate para dependencias
+4. Limpieza automática
+5. Tareas programadas
+
+Código clave:
+```yaml
+# .github/stale.yml
+stale:
+  daysUntilStale: 30
+  daysUntilClose: 7
+  exemptLabels: ['pinned', 'security']
+  staleLabel: stale
+  markComment: |
+    Este issue ha estado inactivo por 30 días. Se cerrará en 7 días si no hay actividad.
+```
+
+Entregables: Limpieza automática, reglas de ramas, mantenimiento automatizado
+
+=== DÍA 25: OPTIMIZACIÓN Y ESCALABILIDAD ===
+
+Objetivos: Optimizar workflows y configurar escalabilidad
+
+Tareas:
+1. Optimizar workflows
+2. Pruebas de escalabilidad
+3. Métricas avanzadas
+4. Notificaciones
+5. Configuración final
+
+Código clave:
+```yaml
+# .github/workflows/optimized.yml
+name: Optimized CI/CD
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [3.11]
+        node-version: [18]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Cache dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.npm
+          key: ${{ runner.os }}-${{ hashFiles('**/requirements.txt', '**/package-lock.json') }}
+```
+
+Entregables: Workflows optimizados, pruebas de escalabilidad, métricas avanzadas
+
+=== RESUMEN FINAL ===
+
+Al completar estos 25 días tendrás:
+
+✅ **Plataforma SaaS completa** con todas las funcionalidades
+✅ **GitHub integrado desde el Día 1** para control de versiones
+✅ **CI/CD automático** desde el Día 3
+✅ **Templates y automatización** desde el Día 2
+✅ **Documentación profesional** con GitHub Pages
+✅ **Monitoreo y alertas** configurados
+✅ **Releases automáticos** con versionado semántico
+✅ **Mantenimiento automatizado** con Dependabot y Renovate
+✅ **Calidad de código** garantizada con SonarCloud
+✅ **Escalabilidad** y optimización implementadas
+
+**Stack Tecnológico Completo:**
+- **Backend**: FastAPI, PostgreSQL, Redis, Celery, Open3D
+- **Frontend**: Next.js 14, TailwindCSS, TypeScript
+- **Infraestructura**: Docker, Railway, Vercel
+- **Pagos**: Stripe
+- **CI/CD**: GitHub Actions
+- **Monitoreo**: GitHub Pages, CodeQL, SonarCloud
+- **Mantenimiento**: Dependabot, Renovate, Stale
+
+**Beneficios del Orden Correcto:**
+- ✅ Control de versiones desde el inicio
+- ✅ Tests automáticos durante todo el desarrollo
+- ✅ CI/CD funcionando desde el principio
+- ✅ Templates disponibles para reportar problemas
+- ✅ Calidad de código garantizada
+- ✅ Despliegues sin errores
+- ✅ Documentación siempre actualizada
+
+Esta guía te llevará desde cero hasta una plataforma SaaS empresarial completa con todas las mejores prácticas de GitHub y DevOps integradas desde el primer día.
+

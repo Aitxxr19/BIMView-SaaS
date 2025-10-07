@@ -1,0 +1,4 @@
+PyQt5
+open3d
+numpy
+laspy 
