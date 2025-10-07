@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
+import { useAuth } from '@/lib/auth'
 
 export default function RegisterPage() {
   const [email, setEmail] = useState('')
@@ -10,6 +11,8 @@ export default function RegisterPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState(false)
+  
+  const { register } = useAuth()
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -22,26 +25,15 @@ export default function RegisterPage() {
       return
     }
 
-    try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/auth/register`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ email, password }),
-      })
-
-      if (response.ok) {
-        setSuccess(true)
-      } else {
-        const errorData = await response.json()
-        setError(errorData.detail || 'Error al registrarse')
-      }
-    } catch (err) {
-      setError('Error de conexión')
-    } finally {
-      setIsLoading(false)
+    const result = await register(email, password)
+    
+    if (result.success) {
+      setSuccess(true)
+    } else {
+      setError(result.error || 'Error al registrarse')
     }
+    
+    setIsLoading(false)
   }
 
   if (success) {

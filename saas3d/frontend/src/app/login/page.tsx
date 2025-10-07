@@ -2,40 +2,31 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
+import { useAuth } from '@/lib/auth'
 
 export default function LoginPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
+  
+  const { login } = useAuth()
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setIsLoading(true)
     setError('')
 
-    try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/auth/login`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ email, password }),
-      })
-
-      if (response.ok) {
-        const data = await response.json()
-        localStorage.setItem('token', data.access_token)
-        window.location.href = '/dashboard'
-      } else {
-        const errorData = await response.json()
-        setError(errorData.detail || 'Error al iniciar sesión')
-      }
-    } catch (err) {
-      setError('Error de conexión')
-    } finally {
-      setIsLoading(false)
+    const result = await login(email, password)
+    
+    if (result.success) {
+      // La redirección se maneja automáticamente en el hook
+      window.location.href = '/dashboard'
+    } else {
+      setError(result.error || 'Error al iniciar sesión')
     }
+    
+    setIsLoading(false)
   }
 
   return (

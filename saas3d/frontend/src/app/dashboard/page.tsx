@@ -1,80 +1,12 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { useRouter } from 'next/navigation'
+import { useAuth } from '@/lib/auth'
+import { useJobs } from '@/lib/useJobs'
+import ProtectedRoute from '@/components/ProtectedRoute'
 
-interface Job {
-  id: number
-  input_key: string
-  output_key?: string
-  status: 'queued' | 'processing' | 'completed' | 'failed'
-  progress: number
-  created_at: string
-  finished_at?: string
-}
-
-export default function DashboardPage() {
-  const [jobs, setJobs] = useState<Job[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [user, setUser] = useState<any>(null)
-  const router = useRouter()
-
-  useEffect(() => {
-    const token = localStorage.getItem('token')
-    if (!token) {
-      router.push('/login')
-      return
-    }
-
-    fetchUser()
-    fetchJobs()
-  }, [router])
-
-  const fetchUser = async () => {
-    try {
-      const token = localStorage.getItem('token')
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/auth/me`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      })
-      
-      if (response.ok) {
-        const userData = await response.json()
-        setUser(userData)
-      } else {
-        localStorage.removeItem('token')
-        router.push('/login')
-      }
-    } catch (error) {
-      console.error('Error fetching user:', error)
-    }
-  }
-
-  const fetchJobs = async () => {
-    try {
-      const token = localStorage.getItem('token')
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/jobs`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      })
-      
-      if (response.ok) {
-        const jobsData = await response.json()
-        setJobs(jobsData)
-      }
-    } catch (error) {
-      console.error('Error fetching jobs:', error)
-    } finally {
-      setIsLoading(false)
-    }
-  }
-
-  const handleLogout = () => {
-    localStorage.removeItem('token')
-    router.push('/')
-  }
+function DashboardContent() {
+  const { user, logout } = useAuth()
+  const { jobs, isLoading: jobsLoading, error, deleteJob } = useJobs()
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -95,15 +27,10 @@ export default function DashboardPage() {
     }
   }
 
-  if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-primary-600 mx-auto"></div>
-          <p className="mt-4 text-gray-600">Cargando dashboard...</p>
-        </div>
-      </div>
-    )
+  const handleDeleteJob = async (jobId: number) => {
+    if (confirm('¿Estás seguro de que quieres eliminar este trabajo?')) {
+      await deleteJob(jobId)
+    }
   }
 
   return (
@@ -118,7 +45,7 @@ export default function DashboardPage() {
             <div className="flex items-center space-x-4">
               <span className="text-gray-600">Hola, {user?.email}</span>
               <button
-                onClick={handleLogout}
+                onClick={logout}
                 className="text-gray-500 hover:text-gray-900"
               >
                 Cerrar Sesión
@@ -139,7 +66,18 @@ export default function DashboardPage() {
 
         {/* Jobs Table */}
         <div className="card">
-          {jobs.length === 0 ? (
+          {error && (
+            <div className="mb-4 p-4 bg-red-100 border border-red-400 text-red-700 rounded">
+              {error}
+            </div>
+          )}
+
+          {jobsLoading ? (
+            <div className="text-center py-12">
+              <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-primary-600 mx-auto"></div>
+              <p className="mt-4 text-gray-600">Cargando trabajos...</p>
+            </div>
+          ) : jobs.length === 0 ? (
             <div className="text-center py-12">
               <div className="text-gray-400 text-6xl mb-4">📁</div>
               <h3 className="text-lg font-medium text-gray-900 mb-2">No hay trabajos</h3>
@@ -176,7 +114,7 @@ export default function DashboardPage() {
                   {jobs.map((job) => (
                     <tr key={job.id}>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                        {job.input_key}
+                        {job.input_key || 'Sin archivo'}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(job.status)}`}>
@@ -196,13 +134,21 @@ export default function DashboardPage() {
                         {new Date(job.created_at).toLocaleDateString()}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                        {job.status === 'completed' && job.output_key ? (
-                          <button className="text-primary-600 hover:text-primary-900">
-                            Descargar
+                        <div className="flex space-x-2">
+                          {job.status === 'completed' && job.output_key ? (
+                            <button className="text-primary-600 hover:text-primary-900">
+                              Descargar
+                            </button>
+                          ) : (
+                            <span className="text-gray-400">-</span>
+                          )}
+                          <button 
+                            onClick={() => handleDeleteJob(job.id)}
+                            className="text-red-600 hover:text-red-900"
+                          >
+                            Eliminar
                           </button>
-                        ) : (
-                          <span className="text-gray-400">-</span>
-                        )}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -213,5 +159,13 @@ export default function DashboardPage() {
         </div>
       </main>
     </div>
+  )
+}
+
+export default function DashboardPage() {
+  return (
+    <ProtectedRoute>
+      <DashboardContent />
+    </ProtectedRoute>
   )
 }
