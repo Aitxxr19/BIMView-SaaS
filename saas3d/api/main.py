@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from database import engine
 from models import Base
 from routes.auth import router as auth_router
+from routes.jobs import router as jobs_router
 
 # Crear tablas
 Base.metadata.create_all(bind=engine)
@@ -12,6 +13,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:3000"])
 
 # Incluir routers
 app.include_router(auth_router, prefix="/auth", tags=["authentication"])
+app.include_router(jobs_router, prefix="/api", tags=["jobs"])
 
 @app.get("/")
 def read_root():
