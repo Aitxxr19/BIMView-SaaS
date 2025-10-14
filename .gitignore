@@ -63,6 +63,10 @@ temp/
 .tmp/
 .temp/
 
+# Uploaded files (keep directory structure but ignore files)
+saas3d/api/uploads/*
+!saas3d/api/uploads/.gitkeep
+
 # Build outputs
 dist/
 build/
