@@ -67,6 +67,10 @@ temp/
 saas3d/api/uploads/*
 !saas3d/api/uploads/.gitkeep
 
+# Output files (keep directory structure but ignore files)
+saas3d/api/outputs/*
+!saas3d/api/outputs/.gitkeep
+
 # Build outputs
 dist/
 build/
